@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
@@ -28,10 +29,71 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-
 	fmt.Println("uploading thumbnail for video", videoID, "by user", userID)
 
 	// TODO: implement the upload here
 
-	respondWithJSON(w, http.StatusOK, struct{}{})
+	// Parse multipart form (max 10MB in memory)
+	const maxMemory = 10 << 20
+	err = r.ParseMultipartForm(maxMemory)
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Unable to parse multipart form", err)
+		return
+	}
+
+	// Get the uploaded file
+	file, header, err := r.FormFile("thumbnail")
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Unable to parse form file", err)
+		return
+	}
+	defer file.Close()
+
+	// Get the content type (e.g. "image/png")
+	mediaType := header.Header.Get("Content-Type")
+	if mediaType == "" {
+		respondWithError(w, http.StatusBadRequest, "Missing Content-Type for thumbnail", nil)
+		return
+	}
+
+	// Read all bytes of the uploaded file
+	data, err := io.ReadAll(file)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error reading file", err)
+		return
+	}
+
+	// Get the video record from DB
+	video, err := cfg.db.GetVideo(videoID)
+	if err != nil {
+		respondWithError(w, http.StatusNotFound, "Video not found", err)
+		return
+	}
+
+	// Check ownership (user must own the video)
+	if video.UserID != userID {
+		respondWithError(w, http.StatusUnauthorized, "Not authorized to update this video", nil)
+		return
+	}
+
+	// Store the thumbnail in the global map
+	videoThumbnails[videoID] = thumbnail{
+		data:      data,
+		mediaType: mediaType,
+	}
+
+	// Update the video's thumbnail URL
+	url := fmt.Sprintf("http://localhost:%s/api/thumbnails/%s", cfg.port, videoID)
+	video.ThumbnailURL = &url
+
+	// Save the updated video metadata
+	err = cfg.db.UpdateVideo(video)
+	if err != nil {
+		delete(videoThumbnails, videoID)
+		respondWithError(w, http.StatusInternalServerError, "Couldn't update video", err)
+		return
+	}
+
+	// Respond with the updated video as JSON
+	respondWithJSON(w, http.StatusOK, video)
 }
