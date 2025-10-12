@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"fmt"
 	"io"
 	"net/http"
@@ -30,8 +31,6 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 	}
 
 	fmt.Println("uploading thumbnail for video", videoID, "by user", userID)
-
-	// TODO: implement the upload here
 
 	// Parse multipart form (max 10MB in memory)
 	const maxMemory = 10 << 20
@@ -76,20 +75,14 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// Store the thumbnail in the global map
-	videoThumbnails[videoID] = thumbnail{
-		data:      data,
-		mediaType: mediaType,
-	}
-
-	// Update the video's thumbnail URL
-	url := fmt.Sprintf("http://localhost:%s/api/thumbnails/%s", cfg.port, videoID)
-	video.ThumbnailURL = &url
+	// Encode image as Base64 and create data URL
+	encoded := base64.StdEncoding.EncodeToString(data)
+	dataURL := fmt.Sprintf("data:%s;base64,%s", mediaType, encoded)
+	video.ThumbnailURL = &dataURL
 
 	// Save the updated video metadata
 	err = cfg.db.UpdateVideo(video)
 	if err != nil {
-		delete(videoThumbnails, videoID)
 		respondWithError(w, http.StatusInternalServerError, "Couldn't update video", err)
 		return
 	}
